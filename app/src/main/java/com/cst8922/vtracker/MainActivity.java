@@ -4,6 +4,7 @@ import android.Manifest;
 import android.content.pm.PackageManager;
 import android.location.Location;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.Looper;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -32,8 +33,19 @@ import com.google.android.gms.maps.SupportMapFragment;
 import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.MarkerOptions;
 import com.google.android.gms.tasks.OnFailureListener;
-import com.google.android.gms.tasks.OnSuccessListener; // Explicitly import OnSuccessListener
+import com.google.android.gms.tasks.OnSuccessListener;
 import com.google.android.material.snackbar.Snackbar;
+import com.google.android.gms.maps.model.BitmapDescriptorFactory;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import com.google.android.gms.maps.model.BitmapDescriptor;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.util.ArrayList;
+import java.util.List;
 
 public class MainActivity extends AppCompatActivity implements OnMapReadyCallback {
 
@@ -49,7 +61,12 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     private TextView statusTextView;
     private LocationRequest locationRequest;
     private LocationCallback locationCallback;
-
+    
+    // Variables for route simulation
+    private List<LatLng> routeCoordinates = new ArrayList<>();
+    private int currentRouteIndex = 0;
+    private Handler routeHandler = new Handler(Looper.getMainLooper());
+    private static final int ROUTE_UPDATE_INTERVAL = 500; // Update every 3 seconds
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -81,6 +98,9 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         // Initialize the fusedLocationClient
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
         
+        // Load route coordinates from route.txt
+        loadRouteCoordinates();
+        
         // Get the SupportMapFragment and request notification when the map is ready
         SupportMapFragment mapFragment = (SupportMapFragment) getSupportFragmentManager()
                 .findFragmentById(R.id.map);
@@ -91,29 +111,230 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         binding.fab.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                // Update location when FAB is clicked
-                updateLocationOnMap();
-                Snackbar.make(view, "Updating your location...", Snackbar.LENGTH_LONG)
+                // Start or continue route simulation when FAB is clicked
+                startRouteSimulation();
+                Snackbar.make(view, "Following predefined route...", Snackbar.LENGTH_LONG)
                         .setAnchorView(R.id.fab)
                         .setAction("Action", null).show();
             }
         });
     }
+    
+    // Method to load route coordinates from route.txt
+    private void loadRouteCoordinates() {
+        try {
+            // Add debug output
+            if (statusTextView != null) {
+                statusTextView.setText("Status: Loading route coordinates...");
+            }
+            
+            InputStream is = getResources().openRawResource(R.raw.route);
+            BufferedReader reader = new BufferedReader(new InputStreamReader(is));
+            String line;
+            
+            while ((line = reader.readLine()) != null) {
+                // Log each line for debugging
+                System.out.println("Route line: " + line);
+                
+                line = line.trim().replace("[", "").replace("]", "");
+                String[] parts = line.split(",");
+                if (parts.length == 2) {
+                    try {
+                        double lat = Double.parseDouble(parts[0].trim());
+                        double lng = Double.parseDouble(parts[1].trim());
+                        routeCoordinates.add(new LatLng(lat, lng));
+                        System.out.println("Added point: " + lat + ", " + lng);
+                    } catch (NumberFormatException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+            
+            reader.close();
+            is.close();
+            
+            if (statusTextView != null) {
+                statusTextView.setText("Status: Loaded " + routeCoordinates.size() + " route points");
+            }
+            
+        } catch (IOException e) {
+            e.printStackTrace();
+            if (statusTextView != null) {
+                statusTextView.setText("Status: Error loading route - " + e.getMessage());
+            }
+        }
+    }
+    
+    // Method to start route simulation
+    private void startRouteSimulation() {
+        if (routeCoordinates.isEmpty()) {
+            if (statusTextView != null) {
+                statusTextView.setText("Status: No route coordinates available");
+            }
+            return;
+        }
+        
+        // Reset to beginning if we've reached the end
+        if (currentRouteIndex >= routeCoordinates.size()) {
+            currentRouteIndex = 0;
+        }
+        
+        // Remove any pending route updates
+        routeHandler.removeCallbacksAndMessages(null);
+        
+        // Start the route simulation
+        simulateNextRoutePoint();
+    }
+    
+    // Method to simulate movement to the next route point
+    private void simulateNextRoutePoint() {
+        System.out.println("Simulating next route point: " + currentRouteIndex + " of " + routeCoordinates.size());
+        
+        if (currentRouteIndex < routeCoordinates.size()) {
+            LatLng currentLocation = routeCoordinates.get(currentRouteIndex);
+            System.out.println("Current location in simulation: " + currentLocation.latitude + ", " + currentLocation.longitude);
+            
+            // Update map
+            updateMapWithLocation(currentLocation);
+            
+            // Move to next point in the route
+            currentRouteIndex++;
+            
+            // Schedule the next update
+            routeHandler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    simulateNextRoutePoint();
+                }
+            }, ROUTE_UPDATE_INTERVAL);
+            
+            // Update status
+            if (statusTextView != null) {
+                statusTextView.setText("Status: Showing route point " + currentRouteIndex + " of " + routeCoordinates.size());
+            }
+        } else {
+            // End of route
+            if (statusTextView != null) {
+                statusTextView.setText("Status: End of route reached");
+            }
+        }
+    }
 
+    private BitmapDescriptor getBitmapDescriptorFromResource(int resourceId) {
+        try {
+            // Load bitmap from drawable resources
+            Bitmap originalBitmap = BitmapFactory.decodeResource(getResources(), resourceId);
+            
+            // Scale the bitmap to an appropriate size for the map (adjust dimensions as needed)
+            Bitmap resizedBitmap = Bitmap.createScaledBitmap(originalBitmap, 100, 100, false);
+            
+            // Create a BitmapDescriptor from the resized bitmap
+            return BitmapDescriptorFactory.fromBitmap(resizedBitmap);
+        } catch (Exception e) {
+            e.printStackTrace();
+            // Return default marker if there's an error
+            return BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE);
+        }
+    }
+    
+    // Method to update the map with a location
+    private void updateMapWithLocation(LatLng location) {
+        if (mMap == null) {
+            System.out.println("Map is null, can't update location");
+            return;
+        }
+        
+        System.out.println("Updating map with location: " + location.latitude + ", " + location.longitude);
+        
+        // Clear previous markers
+        mMap.clear();
+
+        BitmapDescriptor carIcon = getBitmapDescriptorFromResource(R.raw.car);
+        
+        // // Add a marker at current location with custom appearance
+        // MarkerOptions markerOptions = new MarkerOptions()
+        //     .position(location)
+        //     .title("Current Position")
+        //     .snippet("Route point " + currentRouteIndex)
+        //     .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE)) // Use a different color
+        //     .zIndex(2.0f); // Place above other markers
+        
+
+        MarkerOptions markerOptions = new MarkerOptions()
+        .position(location)
+        .title("Current Position")
+        .snippet("Route point " + currentRouteIndex)
+        .icon(carIcon) // Use custom car icon
+        .anchor(0.5f, 0.5f) // Center the icon on the position
+        .zIndex(2.0f); // Place above other markers
+
+
+        mMap.addMarker(markerOptions);
+        
+        // Show route trail with reduced marker size
+        for (int i = 0; i < currentRouteIndex && i < routeCoordinates.size(); i++) {
+            mMap.addMarker(new MarkerOptions()
+                .position(routeCoordinates.get(i))
+                .alpha(0.5f) // semi-transparent
+                .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_GREEN))
+                .anchor(0.5f, 0.5f) // center the marker
+                .visible(true)
+                .zIndex(1.0f)
+            );
+        }
+        
+        // Move camera to current location with zoom
+        // mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(location, 15));
+        
+        // Update the info panel
+        updateInfoPanel(location);
+    }
+    
+    // Helper method to update the info panel with LatLng
+    private void updateInfoPanel(LatLng location) {
+        if (locationTextView != null) {
+            locationTextView.setText("Following predefined route");
+        }
+        
+        if (coordinatesTextView != null) {
+            coordinatesTextView.setText(String.format("Latitude: %.6f, Longitude: %.6f", 
+                    location.latitude, location.longitude));
+        }
+        
+        if (statusTextView != null) {
+            statusTextView.setText("Status: Route point " + currentRouteIndex + " of " + routeCoordinates.size());
+        }
+    }
+    
     @Override
     public void onMapReady(GoogleMap googleMap) {
         mMap = googleMap;
-
+        
+        System.out.println("MAP IS READY NOW!");
+        
         // Set map UI settings for better user experience
         mMap.getUiSettings().setZoomControlsEnabled(true);
         mMap.getUiSettings().setCompassEnabled(true);
         mMap.getUiSettings().setMyLocationButtonEnabled(true);
         
-        // Check for location permission
+        // If we have route coordinates, show the first point
+        if (!routeCoordinates.isEmpty()) {
+            System.out.println("ROUTE COORDINATES ARE NOT EMPTY: " + routeCoordinates.size() + " points loaded");
+            LatLng firstPoint = routeCoordinates.get(0);
+            mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(firstPoint, 15));
+            System.out.println("DISPLAYING FIRST POINT: " + firstPoint.latitude + ", " + firstPoint.longitude);
+            updateMapWithLocation(firstPoint);
+        } else {
+            System.out.println("ROUTE COORDINATES ARE EMPTY!");
+        }
+        
+        // Check for location permission (still needed for the map's "My Location" button)
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED) {
             enableMyLocation();
+            System.out.println("LOCATION PERMISSION GRANTED");
         } else {
+            System.out.println("REQUESTING LOCATION PERMISSION");
             // Request location permission
             ActivityCompat.requestPermissions(this,
                     new String[]{Manifest.permission.ACCESS_FINE_LOCATION, 
@@ -127,90 +348,22 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                 == PackageManager.PERMISSION_GRANTED) {
             // Enable the my-location layer
             mMap.setMyLocationEnabled(true);
-            
-            // Immediately try to get and show current location
-            updateLocationOnMap();
         }
     }
     
+    // Keeping this method for backward compatibility, but it will use route data
     private void updateLocationOnMap() {
-        if (mMap == null) return;
-        
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
-                == PackageManager.PERMISSION_GRANTED) {
-                
-            // Update status text if available
-            if (statusTextView != null) {
-                statusTextView.setText("Status: Finding your location...");
-            }
-            
-            fusedLocationClient.getLastLocation()
-                    .addOnSuccessListener(this, new OnSuccessListener<Location>() {
-                        // This is correct now with the proper import
-                        public void onSuccess(Location location) {
-                            if (location != null) {
-                                LatLng currentLocation = new LatLng(location.getLatitude(), location.getLongitude());
-                                
-                                // Clear previous markers
-                                mMap.clear();
-                                
-                                // Add a marker at current location
-                                MarkerOptions markerOptions = new MarkerOptions()
-                                        .position(currentLocation)
-                                        .title("You are here")
-                                        .snippet("Your current location");
-                                
-                                mMap.addMarker(markerOptions);
-                                
-                                // Move camera to current location with zoom
-                                mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(currentLocation, 15));
-                                
-                                // Update the info panel
-                                updateInfoPanel(location);
-                            } else {
-                                // If location is null, show an error and request a location update
-                                if (statusTextView != null) {
-                                    statusTextView.setText("Status: Could not get location");
-                                }
-                                
-                                // Try requesting a new location instead of using last known
-                                requestNewLocation();
-                            }
-                        }
-                    })
-                    .addOnFailureListener(this, new OnFailureListener() {
-                        @Override
-                        public void onFailure(@NonNull Exception e) {
-                            if (statusTextView != null) {
-                                statusTextView.setText("Status: Error - " + e.getMessage());
-                            }
-                            Snackbar.make(binding.getRoot(), 
-                                "Location error: " + e.getMessage(), 
-                                Snackbar.LENGTH_LONG).show();
-                        }
-                    });
-        }
-    }
-    
-    // Helper method to update the info panel
-    private void updateInfoPanel(Location location) {
-        if (locationTextView != null) {
-            locationTextView.setText("Current location detected");
-        }
-        
-        if (coordinatesTextView != null) {
-            coordinatesTextView.setText(String.format("Latitude: %.6f, Longitude: %.6f", 
-                    location.getLatitude(), location.getLongitude()));
-        }
-        
-        if (statusTextView != null) {
-            statusTextView.setText("Status: Location found");
-        }
+        startRouteSimulation();
     }
 
-    // Method to request fresh location data
+    // Helper method to update the info panel with Location
+    private void updateInfoPanel(Location location) {
+        updateInfoPanel(new LatLng(location.getLatitude(), location.getLongitude()));
+    }
+
+    // Method to request fresh location data - now just advances route
     private void requestNewLocation() {
-        startLocationUpdates();
+        startRouteSimulation();
     }
 
     @Override
@@ -220,7 +373,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                 enableMyLocation();
             } else {
-                Snackbar.make(binding.getRoot(), "Location permission is required to show your position", 
+                Snackbar.make(binding.getRoot(), "Location permission is required for full functionality", 
                         Snackbar.LENGTH_LONG).show();
             }
         }
@@ -229,25 +382,20 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     @Override
     protected void onPause() {
         super.onPause();
-        stopLocationUpdates();
-        // Code to execute when the app is moved to background
+        // Stop route simulation
+        routeHandler.removeCallbacksAndMessages(null);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        // Code to execute when returning to the app
-        if (mMap != null) {
-            startLocationUpdates();
-        }
+        // We don't automatically restart the simulation here to give the user control
     }
 
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
         // Inflate the menu; this adds items to the action bar if it is present.
         getMenuInflater().inflate(R.menu.menu_main, menu);
-
-        createLocationRequest();
         return true;
     }
 
@@ -277,88 +425,4 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             return super.onSupportNavigateUp();
         }
     }
-
-    // Setup the location request (call this in onCreate)
-    private void createLocationRequest() {
-        locationRequest = LocationRequest.create()
-                .setInterval(10000) // Update every 10 seconds
-                .setFastestInterval(5000) // But not faster than every 5 seconds
-                .setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
-
-        // Create the callback that will handle location updates
-        locationCallback = new LocationCallback() {
-            @Override
-            public void onLocationResult(LocationResult locationResult) {
-                if (locationResult == null) {
-                    return;
-                }
-
-                // Get the most recent location
-                Location location = locationResult.getLastLocation();
-
-                // Update the map with the new location
-                if (location != null) {
-                    LatLng currentLocation = new LatLng(location.getLatitude(), location.getLongitude());
-
-                    // Clear previous markers
-                    if (mMap != null) {
-                        mMap.clear();
-
-                        // Add a marker at current location
-                        MarkerOptions markerOptions = new MarkerOptions()
-                                .position(currentLocation)
-                                .title("You are here")
-                                .snippet("Your current location");
-
-                        mMap.addMarker(markerOptions);
-
-                        // Move camera to current location with zoom
-                        mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(currentLocation, 15));
-
-                        // Update the info panel
-                        updateInfoPanel(location);
-
-                        // Update status
-                        if (statusTextView != null) {
-                            statusTextView.setText("Status: Location updated");
-                        }
-                    }
-                }
-            }
-        };
-    }
-
-
-
-    // Method to start location updates
-    private void startLocationUpdates() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
-                == PackageManager.PERMISSION_GRANTED) {
-                
-            if (statusTextView != null) {
-                statusTextView.setText("Status: Finding your location...");
-            }
-            
-            fusedLocationClient.requestLocationUpdates(locationRequest,
-                    locationCallback,
-                    Looper.getMainLooper())
-                    .addOnFailureListener(this, new OnFailureListener() {
-                        @Override
-                        public void onFailure(@NonNull Exception e) {
-                            if (statusTextView != null) {
-                                statusTextView.setText("Status: Error - " + e.getMessage());
-                            }
-                            Snackbar.make(binding.getRoot(), 
-                                "Location error: " + e.getMessage(), 
-                                Snackbar.LENGTH_LONG).show();
-                        }
-                    });
-        }
-    }
-
-    // Method to stop location updates (call in onPause)
-    private void stopLocationUpdates() {
-        fusedLocationClient.removeLocationUpdates(locationCallback);
-    }
-
 }
