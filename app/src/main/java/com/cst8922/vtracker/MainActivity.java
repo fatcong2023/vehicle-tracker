@@ -66,7 +66,12 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     private List<LatLng> routeCoordinates = new ArrayList<>();
     private int currentRouteIndex = 0;
     private Handler routeHandler = new Handler(Looper.getMainLooper());
-    private static final int ROUTE_UPDATE_INTERVAL = 500; // Update every 3 seconds
+    private static final int ROUTE_UPDATE_INTERVAL = 500; // Update every 0.5 seconds
+
+    private MqttClient mqttClient;
+    private String mqttBroker = "tcp://broker.hivemq.com:1883";
+    private String mqttTopic = "gps/devices/+/location"; // Subscribe to all cars
+    private boolean mqttConnected = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -109,13 +114,26 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         }
 
         binding.fab.setOnClickListener(new View.OnClickListener() {
+            // @Override
+            // public void onClick(View view) {
+            //     // Start or continue route simulation when FAB is clicked
+            //     startRouteSimulation();
+            //     Snackbar.make(view, "Following predefined route...", Snackbar.LENGTH_LONG)
+            //             .setAnchorView(R.id.fab)
+            //             .setAction("Action", null).show();
+            // }
             @Override
             public void onClick(View view) {
-                // Start or continue route simulation when FAB is clicked
-                startRouteSimulation();
-                Snackbar.make(view, "Following predefined route...", Snackbar.LENGTH_LONG)
-                        .setAnchorView(R.id.fab)
-                        .setAction("Action", null).show();
+                if (!mqttConnected) {
+                    connectToMQTT();
+                    Snackbar.make(view, "Connecting to live vehicle data...", Snackbar.LENGTH_LONG)
+                            .setAnchorView(R.id.fab)
+                            .setAction("Action", null).show();
+                } else {
+                    Snackbar.make(view, "Already connected to live data", Snackbar.LENGTH_LONG)
+                            .setAnchorView(R.id.fab)
+                            .setAction("Action", null).show();
+                }
             }
         });
     }
@@ -184,6 +202,89 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         
         // Start the route simulation
         simulateNextRoutePoint();
+    }
+
+    private void connectToMQTT() {
+        try {
+            if (statusTextView != null) {
+                statusTextView.setText("Status: Connecting to MQTT broker...");
+            }
+            
+            // Create a unique client ID
+            String clientId = "AndroidClient-" + System.currentTimeMillis();
+            mqttClient = new MqttClient(mqttBroker, clientId, new MemoryPersistence());
+            
+            MqttConnectOptions options = new MqttConnectOptions();
+            options.setAutomaticReconnect(true);
+            options.setCleanSession(true);
+            options.setConnectionTimeout(10);
+            
+            // Set callback for MQTT events
+            mqttClient.setCallback(new MqttCallback() {
+                @Override
+                public void connectionLost(Throwable cause) {
+                    mqttConnected = false;
+                    runOnUiThread(() -> {
+                        if (statusTextView != null) {
+                            statusTextView.setText("Status: MQTT Connection lost! " + cause.getMessage());
+                        }
+                        Snackbar.make(binding.getRoot(), "MQTT Connection lost!", Snackbar.LENGTH_LONG).show();
+                    });
+                }
+    
+                @Override
+                public void messageArrived(String topic, MqttMessage message) throws Exception {
+                    // Parse the received JSON message
+                    String payload = new String(message.getPayload());
+                    JSONObject jsonData = new JSONObject(payload);
+                    
+                    // Extract vehicle ID from the topic
+                    String[] topicParts = topic.split("/");
+                    final String vehicleId = topicParts.length >= 3 ? topicParts[2] : "unknown";
+                    
+                    // Extract coordinates and timestamp
+                    final double lat = jsonData.getDouble("lat");
+                    final double lon = jsonData.getDouble("lon");
+                    final String timestamp = jsonData.getString("timestamp");
+                    
+                    // Log the data
+                    System.out.println("Received MQTT: " + vehicleId + " at " + lat + ", " + lon + " @ " + timestamp);
+                    
+                    // Update UI on the main thread
+                    runOnUiThread(() -> {
+                        LatLng location = new LatLng(lat, lon);
+                        updateMapWithLocation(location);
+                        
+                        if (statusTextView != null) {
+                            statusTextView.setText("Status: Vehicle " + vehicleId + " updated @ " + timestamp);
+                        }
+                    });
+                }
+    
+                @Override
+                public void deliveryComplete(IMqttDeliveryToken token) {
+                    // Not used for subscription
+                }
+            });
+    
+            // Connect to broker and subscribe
+            mqttClient.connect(options);
+            mqttClient.subscribe(mqttTopic, 0);
+            mqttConnected = true;
+            
+            if (statusTextView != null) {
+                statusTextView.setText("Status: Connected to MQTT, listening for updates...");
+            }
+            
+            Snackbar.make(binding.getRoot(), "Connected to MQTT broker", Snackbar.LENGTH_LONG).show();
+        } catch (MqttException e) {
+            e.printStackTrace();
+            if (statusTextView != null) {
+                statusTextView.setText("Status: MQTT Error - " + e.getMessage());
+            }
+            Snackbar.make(binding.getRoot(), "Failed to connect to MQTT: " + e.getMessage(), 
+                    Snackbar.LENGTH_LONG).show();
+        }
     }
     
     // Method to simulate movement to the next route point
@@ -292,8 +393,17 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     
     // Helper method to update the info panel with LatLng
     private void updateInfoPanel(LatLng location) {
+        // if (locationTextView != null) {
+        //     locationTextView.setText("Following predefined route");
+        // }
+        
+        // if (coordinatesTextView != null) {
+        //     coordinatesTextView.setText(String.format("Latitude: %.6f, Longitude: %.6f", 
+        //             location.latitude, location.longitude));
+        // }
+
         if (locationTextView != null) {
-            locationTextView.setText("Following predefined route");
+            locationTextView.setText(mqttConnected ? "Live tracking mode" : "Following predefined route");
         }
         
         if (coordinatesTextView != null) {
@@ -423,6 +533,18 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         } catch (Exception e) {
             e.printStackTrace();
             return super.onSupportNavigateUp();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (mqttClient != null && mqttClient.isConnected()) {
+            try {
+                mqttClient.disconnect();
+            } catch (MqttException e) {
+                e.printStackTrace();
+            }
         }
     }
 }
