@@ -67,12 +67,36 @@
             <TextView
                 android:id="@+id/status_text"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Status: Waiting for location"
-                android:textSize="16sp"
-                android:layout_marginTop="8dp" />
+                android:layout_height="41dp"
+                android:layout_marginTop="8dp"
+                android:text="GPS Location"
+                android:textSize="16sp" />
+
+            <LinearLayout
+                android:id="@+id/status_indicator_layout"
+                android:layout_width="match_parent"
+                android:layout_height="36dp"
+                android:layout_marginTop="4dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <View
+                    android:id="@+id/status_indicator_box"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:background="@android:color/darker_gray" />
+
+                <TextView
+                    android:id="@+id/status_indicator_text"
+                    android:layout_width="338dp"
+                    android:layout_height="27dp"
+                    android:layout_marginStart="8dp"
+                    android:text="Waiting for vehicle status..."
+                    android:textSize="14sp" />
+            </LinearLayout>
 
         </LinearLayout>
+
     </LinearLayout>
 
     <com.google.android.material.floatingactionbutton.FloatingActionButton
@@ -83,5 +107,18 @@
         android:layout_marginEnd="16dp"
         android:layout_marginBottom="16dp"
         app:srcCompat="@android:drawable/ic_menu_mylocation" />
+
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+    android:id="@+id/center_button"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:layout_gravity="bottom|start"
+    android:layout_marginStart="16dp"
+    android:layout_marginBottom="16dp"
+    app:srcCompat="@android:drawable/ic_menu_mylocation"
+    app:fabSize="normal"
+    app:backgroundTint="#FFFFFF"
+    app:tint="#0066CC"
+    android:contentDescription="Center map on vehicle" />
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>
